@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Deskflow Tailscale Fleet</title>
+<style>
+  :root {
+    --bg: #0b1020;
+    --panel: #131a2e;
+    --panel-2: #19233d;
+    --border: #2a3659;
+    --text: #eef2ff;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent-2: #818cf8;
+    --good: #22c55e;
+    --warn: #f59e0b;
+    --bad: #ef4444;
+    --master: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.4;
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 16px;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .pill.good { color: var(--good); border-color: rgba(34, 197, 94, .4); }
+  .pill.warn { color: var(--warn); border-color: rgba(245, 158, 11, .4); }
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  button, .btn {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    padding: 8px 13px;
+    border-radius: 9px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: transform .08s, border-color .15s, background .15s;
+  }
+  button:hover, .btn:hover { border-color: var(--accent); }
+  button:active, .btn:active { transform: scale(0.98); }
+  button.primary { background: #0284c7; border-color: #38bdf8; color: #fff; }
+  button.good { background: #15803d; border-color: #22c55e; color: #fff; }
+  button.danger { background: #991b1b; border-color: #ef4444; color: #fff; }
+  button.sm { padding: 5px 9px; font-size: 12px; border-radius: 7px; }
+  main {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 14px;
+    display: grid;
+    gap: 14px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+  }
+  .card-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .card-title { font-size: 14px; font-weight: 700; color: #cbd5e1; text-transform: uppercase; letter-spacing: .04em; }
+  .scan-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+  label.checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  #photoInput { display: none; }
+  #scanPreviewWrap {
+    margin-top: 12px;
+    display: none;
+    gap: 10px;
+    flex-direction: column;
+  }
+  #scanCanvas {
+    max-width: 100%;
+    max-height: 300px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: #000;
+    align-self: flex-start;
+  }
+  #liveVideoWrap {
+    margin-top: 12px;
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+  }
+  #liveVideo {
+    max-width: 100%;
+    max-height: 320px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: #000;
+  }
+  .canvas-wrap {
+    position: relative;
+    width: 100%;
+    height: 430px;
+    background:
+      radial-gradient(circle at 1px 1px, #223052 1px, transparent 0) 0 0 / 28px 28px,
+      #080d1a;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+  }
+  #linkSvg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+  .pc-box {
+    position: absolute;
+    background: rgba(25, 35, 61, 0.94);
+    border: 2px solid #475569;
+    border-radius: 10px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    cursor: grab;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, .35);
+    transition: border-color .12s, box-shadow .12s;
+  }
+  .pc-box:active { cursor: grabbing; }
+  .pc-box.master {
+    border-color: var(--master);
+    box-shadow: 0 0 0 2px rgba(251, 191, 36, .25), 0 10px 24px rgba(0, 0, 0, .45);
+  }
+  .pc-box.offline { opacity: 0.65; border-style: dashed; }
+  .pc-top { display: flex; justify-content: space-between; align-items: center; gap: 4px; }
+  .pc-code {
+    font-weight: 800;
+    font-size: 12px;
+    padding: 2px 7px;
+    border-radius: 6px;
+    background: #0f172a;
+    border: 1px solid var(--border);
+    color: var(--accent);
+  }
+  .pc-name { font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pc-meta { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
+  .master-btn {
+    padding: 2px 7px;
+    font-size: 11px;
+    border-radius: 6px;
+    background: #0f172a;
+    border: 1px solid var(--border);
+  }
+  .master-btn.is-master { background: rgba(251, 191, 36, .18); border-color: var(--master); color: var(--master); }
+  .unplaced-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center; }
+  .presets-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .preset-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+  .preset-chip.active { border-color: var(--accent); }
+  input[type="text"] {
+    background: #0b1020;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 13px;
+  }
+  .nodes-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 10px;
+  }
+  .node-card {
+    background: #0e1528;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    font-size: 12px;
+  }
+  .log-box {
+    margin-top: 6px;
+    background: #050811;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 8px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 11px;
+    color: #94a3b8;
+    max-height: 110px;
+    overflow: auto;
+    white-space: pre-wrap;
+  }
+  pre.conf-preview {
+    background: #050811;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 12px;
+    overflow: auto;
+    max-height: 220px;
+    margin: 0;
+  }
+  .toast {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    background: #0f172a;
+    border: 1px solid var(--accent);
+    color: var(--text);
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, .5);
+    display: none;
+    z-index: 50;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span>⚡ Deskflow Fleet</span>
+    <span id="onlinePill" class="pill">0 online</span>
+    <span id="pairPill" class="pill">Pair: Off</span>
+    <span id="revPill" class="pill">Rev 1</span>
+  </div>
+  <div class="toolbar">
+    <button id="btnPair" class="primary">📷 Pair / Show QRs</button>
+    <button id="btnStopPair" style="display:none">Hide QRs</button>
+    <button id="btnApply" class="good">▶ Apply &amp; Connect</button>
+    <button id="btnStopAll" class="danger">■ Stop All</button>
+  </div>
+</header>
+
+<main>
+  <!-- Multi-QR Photo Scanner -->
+  <section class="card">
+    <div class="card-head">
+      <div class="card-title">1. Single-Photo Multi-QR Desk Scan</div>
+      <span id="scannerStatus" class="pill">Loading zxing-wasm...</span>
+    </div>
+    <div class="scan-row">
+      <label for="photoInput" class="btn primary">📸 Snap / Upload Desk Photo</label>
+      <input id="photoInput" type="file" accept="image/*" capture="environment" />
+      <button id="btnLiveCam" style="display:none">🎥 Live Camera</button>
+      <label class="checkbox">
+        <input id="chkAutoApply" type="checkbox" checked />
+        Auto-apply &amp; connect after scan
+      </label>
+    </div>
+    <div id="liveVideoWrap">
+      <video id="liveVideo" autoplay playsinline muted></video>
+      <div class="scan-row">
+        <button id="btnCaptureLive" class="good">📸 Capture &amp; Detect All QRs</button>
+        <button id="btnCloseLive">Close Camera</button>
+      </div>
+    </div>
+    <div id="scanPreviewWrap">
+      <canvas id="scanCanvas"></canvas>
+      <div id="scanSummary" style="font-size:13px;color:var(--muted)"></div>
+    </div>
+  </section>
+
+  <!-- 2D Spatial Desk Canvas -->
+  <section class="card">
+    <div class="card-head">
+      <div class="card-title">2. Spatial Desk Layout (Drag &amp; Snap · Click 👑 Master)</div>
+      <div class="toolbar">
+        <button id="btnAutoRow" class="sm">Auto Row</button>
+        <button id="btnAutoGrid" class="sm">Auto 2×2 Grid</button>
+        <button id="btnFit" class="sm">Fit View</button>
+      </div>
+    </div>
+    <div id="deskCanvas" class="canvas-wrap">
+      <svg id="linkSvg"></svg>
+    </div>
+    <div id="unplacedBar" class="unplaced-bar"></div>
+  </section>
+
+  <!-- Presets -->
+  <section class="card">
+    <div class="card-head">
+      <div class="card-title">3. Saved Desk Presets</div>
+    </div>
+    <div class="presets-row">
+      <input id="presetName" type="text" placeholder="e.g. 4-PC Battlestation" />
+      <button id="btnSavePreset" class="sm">💾 Save Preset</button>
+      <div id="presetsList" class="presets-row"></div>
+    </div>
+  </section>
+
+  <!-- Live PC Status & Config -->
+  <section class="card">
+    <div class="card-head">
+      <div class="card-title">4. Fleet PCs &amp; Deskflow Config</div>
+    </div>
+    <div id="nodesGrid" class="nodes-grid"></div>
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;font-size:13px;color:var(--muted)">View compiled deskflow-server.conf</summary>
+      <pre id="confPreview" class="conf-preview"></pre>
+    </details>
+  </section>
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script type="module">
+let readBarcodesFn = null;
+const scannerStatus = document.getElementById('scannerStatus');
+
+async function initScanner() {
+  try {
+    const mod = await import('https://cdn.jsdelivr.net/npm/zxing-wasm@2/dist/reader/index.js');
+    mod.prepareZXingModule({
+      overrides: {
+        locateFile: (path, prefix) => path.endsWith('.wasm')
+          ? `https://cdn.jsdelivr.net/npm/zxing-wasm@${mod.ZXING_WASM_VERSION}/dist/reader/${path}`
+          : prefix + path
+      }
+    });
+    readBarcodesFn = mod.readBarcodes;
+    scannerStatus.textContent = 'Scanner ready (zxing-wasm)';
+    scannerStatus.className = 'pill good';
+  } catch (err) {
+    scannerStatus.textContent = 'Offline / CDN blocked (drag canvas still works)';
+    scannerStatus.className = 'pill warn';
+  }
+}
+initScanner();
+
+if (window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+  document.getElementById('btnLiveCam').style.display = 'inline-flex';
+}
+
+const state = {
+  nodes: [],
+  layout: { master_id: null, items: [], active_preset: null },
+  links: {},
+  presets: [],
+  server_conf_preview: '',
+  pair_active: false,
+  pair_expires_in: 0,
+  revision: 1,
+  dirty: false,
+  scale: 120,
+  offsetX: 60,
+  offsetY: 90,
+};
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { el.style.display = 'none'; }, 3500);
+}
+
+async function api(path, method = 'GET', body = null) {
+  const opts = { method, headers: {} };
+  if (body !== null) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function nodeById(id) {
+  return state.nodes.find(n => n.id === id);
+}
+
+function fitCanvas() {
+  const wrap = document.getElementById('deskCanvas');
+  const items = state.layout.items;
+  if (!items.length) return;
+  const minX = Math.min(...items.map(i => i.x));
+  const minY = Math.min(...items.map(i => i.y));
+  const maxX = Math.max(...items.map(i => i.x + i.w));
+  const maxY = Math.max(...items.map(i => i.y + i.h));
+  const dw = Math.max(1, maxX - minX);
+  const dh = Math.max(1, maxY - minY);
+  const pad = 44;
+  const sx = (wrap.clientWidth - pad * 2) / dw;
+  const sy = (wrap.clientHeight - pad * 2) / dh;
+  state.scale = Math.max(52, Math.min(180, Math.min(sx, sy)));
+  state.offsetX = (wrap.clientWidth - dw * state.scale) / 2 - minX * state.scale;
+  state.offsetY = (wrap.clientHeight - dh * state.scale) / 2 - minY * state.scale;
+}
+
+function renderCanvas() {
+  const wrap = document.getElementById('deskCanvas');
+  wrap.querySelectorAll('.pc-box').forEach(el => el.remove());
+
+  const items = state.layout.items || [];
+  for (const it of items) {
+    const node = nodeById(it.id);
+    const isMaster = state.layout.master_id === it.id;
+    const box = document.createElement('div');
+    box.className = 'pc-box' + (isMaster ? ' master' : '') + (node && !node.online ? ' offline' : '');
+    box.style.left = `${state.offsetX + it.x * state.scale}px`;
+    box.style.top = `${state.offsetY + it.y * state.scale}px`;
+    box.style.width = `${Math.max(96, it.w * state.scale)}px`;
+    box.style.height = `${Math.max(66, it.h * state.scale)}px`;
+
+    const cname = node ? node.computer_name : it.id;
+    const osBadge = node ? node.os : '?';
+    const dims = node ? `${node.display_w}×${node.display_h}` : '';
+    const dot = node ? (node.online ? '🟢' : '🔴') : '⚪';
+
+    box.innerHTML = `
+      <div class="pc-top">
+        <span class="pc-code">${it.id}</span>
+        <button class="master-btn ${isMaster ? 'is-master' : ''}" type="button">${isMaster ? '👑 Master' : 'Set Master'}</button>
+      </div>
+      <div class="pc-name">${dot} ${cname}</div>
+      <div class="pc-meta"><span>${osBadge}</span><span>${dims}</span></div>
+    `;
+
+    box.querySelector('.master-btn').addEventListener('pointerdown', (e) => e.stopPropagation());
+    box.querySelector('.master-btn').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      state.layout.master_id = it.id;
+      state.dirty = false;
+      renderCanvas();
+      await applyCurrentLayout();
+    });
+
+    box.addEventListener('pointerdown', (e) => startDrag(e, it, box));
+    wrap.appendChild(box);
+  }
+  renderUnplaced();
+  renderLinks();
+}
+
+function renderLinks() {
+  const svg = document.getElementById('linkSvg');
+  svg.innerHTML = '';
+  const itemsById = Object.fromEntries((state.layout.items || []).map(i => [i.id, i]));
+  for (const [srcId, arr] of Object.entries(state.links || {})) {
+    const a = itemsById[srcId];
+    if (!a) continue;
+    for (const lk of arr) {
+      const b = itemsById[lk.dst_id];
+      if (!b) continue;
+      const x1 = state.offsetX + (a.x + a.w / 2) * state.scale;
+      const y1 = state.offsetY + (a.y + a.h / 2) * state.scale;
+      const x2 = state.offsetX + (b.x + b.w / 2) * state.scale;
+      const y2 = state.offsetY + (b.y + b.h / 2) * state.scale;
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', x1);
+      line.setAttribute('y1', y1);
+      line.setAttribute('x2', x2);
+      line.setAttribute('y2', y2);
+      line.setAttribute('stroke', 'rgba(56, 189, 248, 0.35)');
+      line.setAttribute('stroke-width', '2');
+      line.setAttribute('stroke-dasharray', '5,4');
+      svg.appendChild(line);
+    }
+  }
+}
+
+function renderUnplaced() {
+  const bar = document.getElementById('unplacedBar');
+  const placedIds = new Set((state.layout.items || []).map(i => i.id));
+  const missing = state.nodes.filter(n => !placedIds.has(n.id));
+  bar.innerHTML = '';
+  if (!missing.length) return;
+  const lbl = document.createElement('span');
+  lbl.style.fontSize = '12px';
+  lbl.style.color = 'var(--muted)';
+  lbl.textContent = 'Unplaced PCs:';
+  bar.appendChild(lbl);
+  for (const n of missing) {
+    const btn = document.createElement('button');
+    btn.className = 'sm';
+    btn.textContent = `+ ${n.id} (${n.computer_name})`;
+    btn.onclick = () => {
+      const maxX = state.layout.items.length ? Math.max(...state.layout.items.map(i => i.x + i.w)) : 0;
+      const ar = Math.max(0.6, Math.min(5.0, (n.display_w || 1920) / Math.max(1, n.display_h || 1080)));
+      state.layout.items.push({ id: n.id, x: Number(maxX.toFixed(3)), y: 0, w: Number(ar.toFixed(3)), h: 1.0 });
+      if (!state.layout.master_id) state.layout.master_id = n.id;
+      state.dirty = true;
+      fitCanvas();
+      renderCanvas();
+    };
+    bar.appendChild(btn);
+  }
+}
+
+function startDrag(e, item, box) {
+  e.preventDefault();
+  box.setPointerCapture(e.pointerId);
+  const startX = e.clientX;
+  const startY = e.clientY;
+  const origX = item.x;
+  const origY = item.y;
+  state.dirty = true;
+
+  const onMove = (ev) => {
+    item.x = Number((origX + (ev.clientX - startX) / state.scale).toFixed(3));
+    item.y = Number((origY + (ev.clientY - startY) / state.scale).toFixed(3));
+    box.style.left = `${state.offsetX + item.x * state.scale}px`;
+    box.style.top = `${state.offsetY + item.y * state.scale}px`;
+  };
+  const onUp = () => {
+    box.removeEventListener('pointermove', onMove);
+    box.removeEventListener('pointerup', onUp);
+    snapItem(item);
+    renderCanvas();
+  };
+  box.addEventListener('pointermove', onMove);
+  box.addEventListener('pointerup', onUp);
+}
+
+function snapItem(item) {
+  const snap = 0.22;
+  for (const other of state.layout.items) {
+    if (other.id === item.id) continue;
+    if (Math.abs((item.x) - (other.x + other.w)) < snap) item.x = other.x + other.w;
+    if (Math.abs((item.x + item.w) - other.x) < snap) item.x = other.x - item.w;
+    if (Math.abs(item.x - other.x) < snap) item.x = other.x;
+    if (Math.abs(item.y - other.y) < snap) item.y = other.y;
+    if (Math.abs(item.y - (other.y + other.h)) < snap) item.y = other.y + other.h;
+    if (Math.abs((item.y + item.h) - other.y) < snap) item.y = other.y - item.h;
+  }
+  item.x = Number(item.x.toFixed(3));
+  item.y = Number(item.y.toFixed(3));
+}
+
+function autoArrange(mode) {
+  const nodes = state.nodes.filter(n => n.online).length ? state.nodes.filter(n => n.online) : state.nodes;
+  if (!nodes.length) return;
+  const items = [];
+  if (mode === 'row') {
+    let x = 0;
+    for (const n of nodes) {
+      const ar = Number(Math.max(0.6, Math.min(5.0, n.display_w / Math.max(1, n.display_h))).toFixed(3));
+      items.push({ id: n.id, x: Number(x.toFixed(3)), y: 0, w: ar, h: 1.0 });
+      x += ar;
+    }
+  } else {
+    const cols = Math.ceil(Math.sqrt(nodes.length));
+    let x = 0, y = 0, rowH = 1.0;
+    nodes.forEach((n, idx) => {
+      const ar = Number(Math.max(0.6, Math.min(5.0, n.display_w / Math.max(1, n.display_h))).toFixed(3));
+      if (idx > 0 && idx % cols === 0) { x = 0; y += rowH; }
+      items.push({ id: n.id, x: Number(x.toFixed(3)), y: Number(y.toFixed(3)), w: ar, h: 1.0 });
+      x += ar;
+    });
+  }
+  state.layout.items = items;
+  if (!state.layout.master_id || !items.some(i => i.id === state.layout.master_id)) {
+    state.layout.master_id = items[0].id;
+  }
+  state.dirty = true;
+  fitCanvas();
+  renderCanvas();
+}
+
+async function applyCurrentLayout() {
+  try {
+    const res = await api('/api/layout/apply', 'POST', {
+      master_id: state.layout.master_id,
+      items: state.layout.items,
+      active_preset: state.layout.active_preset,
+    });
+    state.dirty = false;
+    toast(`Connected! Master: ${res.master_id || 'none'} (rev ${res.revision})`);
+    await refreshState();
+  } catch (err) {
+    toast(`Apply failed: ${err.message}`);
+  }
+}
+
+function renderSidebar() {
+  const onlineCount = state.nodes.filter(n => n.online).length;
+  const onlinePill = document.getElementById('onlinePill');
+  onlinePill.textContent = `${onlineCount} / ${state.nodes.length} online`;
+  onlinePill.className = 'pill ' + (onlineCount > 0 ? 'good' : 'warn');
+
+  const pairPill = document.getElementById('pairPill');
+  pairPill.textContent = state.pair_active ? `Pair: ${Math.ceil(state.pair_expires_in)}s` : 'Pair: Off';
+  pairPill.className = 'pill ' + (state.pair_active ? 'good' : '');
+  document.getElementById('btnStopPair').style.display = state.pair_active ? 'inline-flex' : 'none';
+  document.getElementById('revPill').textContent = `Rev ${state.revision}`;
+
+  const presetsList = document.getElementById('presetsList');
+  presetsList.innerHTML = '';
+  for (const p of state.presets) {
+    const chip = document.createElement('div');
+    chip.className = 'preset-chip' + (state.layout.active_preset === p.name ? ' active' : '');
+    const applyBtn = document.createElement('button');
+    applyBtn.className = 'sm';
+    applyBtn.textContent = `▶ ${p.name}`;
+    applyBtn.onclick = async () => {
+      await api('/api/presets/apply', 'POST', { name: p.name });
+      state.dirty = false;
+      toast(`Switched preset: ${p.name}`);
+      await refreshState();
+    };
+    const delBtn = document.createElement('button');
+    delBtn.className = 'sm';
+    delBtn.textContent = '×';
+    delBtn.onclick = async () => {
+      await api(`/api/presets/${encodeURIComponent(p.name)}`, 'DELETE');
+      await refreshState();
+    };
+    chip.appendChild(applyBtn);
+    chip.appendChild(delBtn);
+    presetsList.appendChild(chip);
+  }
+
+  const grid = document.getElementById('nodesGrid');
+  grid.innerHTML = '';
+  for (const n of state.nodes) {
+    const div = document.createElement('div');
+    div.className = 'node-card';
+    const roleTag = state.layout.master_id === n.id ? '👑 Master' : 'Client';
+    const dfBadge = n.deskflow_installed ? n.deskflow_status : '⚠️ deskflow-core missing';
+    div.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <strong>${n.online ? '🟢' : '🔴'} ${n.id} · ${n.computer_name}</strong>
+        <span class="pill">${roleTag}</span>
+      </div>
+      <div style="color:var(--muted)">IP: ${n.tailscale_ip || 'none'} · ${n.os_detail}</div>
+      <div style="color:var(--muted)">Screens: ${n.display_w}×${n.display_h} · Deskflow: <b>${dfBadge}</b></div>
+      ${n.deskflow_log ? `<div class="log-box">${escapeHtml(n.deskflow_log)}</div>` : ''}
+    `;
+    grid.appendChild(div);
+  }
+
+  document.getElementById('confPreview').textContent = state.server_conf_preview || '# Apply a layout to generate deskflow-server.conf';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function refreshState() {
+  try {
+    const data = await api('/api/state');
+    state.nodes = data.nodes || [];
+    state.links = data.links || {};
+    state.presets = data.presets || [];
+    state.server_conf_preview = data.server_conf_preview || '';
+    state.pair_active = Boolean(data.pair_active);
+    state.pair_expires_in = Number(data.pair_expires_in || 0);
+    state.revision = Number(data.revision || 1);
+
+    if (!state.dirty) {
+      const hadItems = state.layout.items.length > 0;
+      state.layout = data.layout || { master_id: null, items: [], active_preset: null };
+      if (!state.layout.items.length && state.nodes.length) {
+        autoArrange('row');
+        state.dirty = false;
+      } else if (!hadItems && state.layout.items.length) {
+        fitCanvas();
+      }
+      renderCanvas();
+    }
+    renderSidebar();
+  } catch (err) {
+    // Ignore transient poll failures
+  }
+}
+
+async function scanImageSource(source) {
+  if (!readBarcodesFn) {
+    toast('Scanner still loading or offline.');
+    return;
+  }
+  const wrap = document.getElementById('scanPreviewWrap');
+  const canvas = document.getElementById('scanCanvas');
+  const summary = document.getElementById('scanSummary');
+  const maxDim = 2400;
+  const sw = source.width || source.videoWidth;
+  const sh = source.height || source.videoHeight;
+  const ratio = Math.min(1, maxDim / Math.max(sw, sh));
+  const cw = Math.max(1, Math.round(sw * ratio));
+  const ch = Math.max(1, Math.round(sh * ratio));
+  canvas.width = cw;
+  canvas.height = ch;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(source, 0, 0, cw, ch);
+  wrap.style.display = 'flex';
+
+  const imgData = ctx.getImageData(0, 0, cw, ch);
+  const results = await readBarcodesFn(imgData, { tryHarder: true, formats: ['QRCode'] });
+  const detections = [];
+
+  ctx.lineWidth = 4;
+  ctx.font = 'bold 20px sans-serif';
+  for (const res of results) {
+    const pos = res.position;
+    if (!pos) continue;
+    const xs = [pos.topLeft.x, pos.topRight.x, pos.bottomRight.x, pos.bottomLeft.x];
+    const ys = [pos.topLeft.y, pos.topRight.y, pos.bottomRight.y, pos.bottomLeft.y];
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const size = Math.max(maxX - minX, maxY - minY);
+    detections.push({ code: res.text, cx, cy, size });
+
+    ctx.strokeStyle = '#22c55e';
+    ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+    ctx.fillStyle = '#22c55e';
+    ctx.fillText(res.text, minX, Math.max(22, minY - 6));
+  }
+
+  if (!detections.length) {
+    summary.textContent = 'No QR codes detected. Ensure PCs are showing QRs ("Pair / Show QRs") and try closer/brighter photo.';
+    toast('No QR codes found in photo');
+    return;
+  }
+
+  summary.textContent = `Detected ${detections.length} QR(s): ${detections.map(d => d.code).join(', ')}`;
+  const applyNow = document.getElementById('chkAutoApply').checked;
+  const solved = await api('/api/layout/from-photo', 'POST', { detections, apply: applyNow });
+  if (solved.items && solved.items.length) {
+    state.layout = { master_id: solved.master_id, items: solved.items, active_preset: null };
+    state.dirty = !applyNow;
+    fitCanvas();
+    renderCanvas();
+    await refreshState();
+    toast(applyNow ? `Scanned ${solved.items.length} PCs & connected!` : `Solved ${solved.items.length} PCs — click Apply & Connect`);
+  } else {
+    toast('Detected QRs do not match any online PC code');
+  }
+}
+
+document.getElementById('photoInput').addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const bmp = await createImageBitmap(file);
+    await scanImageSource(bmp);
+  } catch (err) {
+    toast(`Scan error: ${err.message}`);
+  }
+});
+
+let liveStream = null;
+document.getElementById('btnLiveCam').onclick = async () => {
+  try {
+    liveStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    document.getElementById('liveVideo').srcObject = liveStream;
+    document.getElementById('liveVideoWrap').style.display = 'flex';
+  } catch (err) {
+    toast(`Camera error: ${err.message}`);
+  }
+};
+document.getElementById('btnCloseLive').onclick = () => {
+  if (liveStream) {
+    liveStream.getTracks().forEach(t => t.stop());
+    liveStream = null;
+  }
+  document.getElementById('liveVideoWrap').style.display = 'none';
+};
+document.getElementById('btnCaptureLive').onclick = async () => {
+  const vid = document.getElementById('liveVideo');
+  await scanImageSource(vid);
+};
+
+document.getElementById('btnPair').onclick = async () => {
+  await api('/api/pair/start', 'POST', { duration: 45 });
+  toast('Showing QR overlays on all online PCs for 45s');
+  await refreshState();
+};
+document.getElementById('btnStopPair').onclick = async () => {
+  await api('/api/pair/stop', 'POST', {});
+  await refreshState();
+};
+document.getElementById('btnApply').onclick = applyCurrentLayout;
+document.getElementById('btnStopAll').onclick = async () => {
+  await api('/api/layout/stop', 'POST', {});
+  state.dirty = false;
+  toast('Stopped Deskflow on all PCs');
+  await refreshState();
+};
+document.getElementById('btnAutoRow').onclick = () => autoArrange('row');
+document.getElementById('btnAutoGrid').onclick = () => autoArrange('grid');
+document.getElementById('btnFit').onclick = () => { fitCanvas(); renderCanvas(); };
+document.getElementById('btnSavePreset').onclick = async () => {
+  const inp = document.getElementById('presetName');
+  const name = inp.value.trim();
+  if (!name) return toast('Enter a preset name first');
+  await api('/api/presets/save', 'POST', { name, layout: state.layout });
+  inp.value = '';
+  toast(`Saved preset "${name}"`);
+  await refreshState();
+};
+
+refreshState();
+setInterval(refreshState, 2000);
+</script>
+</body>
+</html>
