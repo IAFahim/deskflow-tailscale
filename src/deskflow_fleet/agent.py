@@ -37,6 +37,9 @@ def default_runtime_dir() -> Path:
     return Path.home() / ".local" / "share" / "deskflow-tailscale" / "run"
 
 
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _post_json(url: str, payload: Dict[str, Any], timeout: float = 3.5) -> Dict[str, Any]:
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -45,7 +48,7 @@ def _post_json(url: str, payload: Dict[str, Any], timeout: float = 3.5) -> Dict[
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with _NO_PROXY_OPENER.open(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 

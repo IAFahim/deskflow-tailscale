@@ -26,11 +26,14 @@ def _default_hub_url() -> str:
     return "http://127.0.0.1:24808"
 
 
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _req(url: str, method: str = "GET", body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     data = json.dumps(body).encode("utf-8") if body is not None else None
     headers = {"Content-Type": "application/json"} if body is not None else {}
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=4.0) as resp:
+    with _NO_PROXY_OPENER.open(req, timeout=4.0) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 

@@ -121,6 +121,10 @@ WantedBy=default.target
 EOF
     systemctl --user daemon-reload
     systemctl --user enable --now deskflow-fleet-hub.service
+  elif [[ -f "$UNIT_DIR/deskflow-fleet-hub.service" ]]; then
+    systemctl --user disable --now deskflow-fleet-hub.service >/dev/null 2>&1 || true
+    rm -f "$UNIT_DIR/deskflow-fleet-hub.service"
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
   fi
 
   cat > "$UNIT_DIR/deskflow-fleet-agent.service" <<EOF

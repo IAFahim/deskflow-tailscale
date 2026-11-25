@@ -34,7 +34,8 @@ class HubAPITests(unittest.TestCase):
         data = json.dumps(body).encode("utf-8") if body is not None else None
         headers = {"Content-Type": "application/json"} if body is not None else {}
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=data, headers=headers, method=method)
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=3.0) as resp:
             return resp.status, resp.headers.get("Content-Type", ""), resp.read()
 
     def test_index_and_heartbeat_pair_photo_presets(self) -> None:
