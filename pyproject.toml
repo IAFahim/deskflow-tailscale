@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deskflow-tailscale"
+version = "0.1.0"
+description = "Thin Deskflow + Tailscale KVM Fleet orchestrator built from tinyqr, qr-overlay, desk-layout, and tailscale-host"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+dependencies = [
+  "tinyqr @ https://github.com/IAFahim/tinyqr/archive/refs/heads/main.tar.gz",
+  "qr-overlay @ https://github.com/IAFahim/qr-overlay/archive/refs/heads/main.tar.gz",
+  "desk-layout @ https://github.com/IAFahim/desk-layout/archive/refs/heads/main.tar.gz",
+  "tailscale-host @ https://github.com/IAFahim/tailscale-host/archive/refs/heads/main.tar.gz",
+]
+
+[project.scripts]
+deskflow-hub = "deskflow_fleet.hub:main"
+deskflow-agent = "deskflow_fleet.agent:main"
+deskflow-pair = "deskflow_fleet.pair_cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+deskflow_fleet = ["web/*.html"]

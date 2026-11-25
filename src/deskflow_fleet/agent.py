@@ -1,5 +1,4 @@
 """Cross-platform per-PC Deskflow-Tailscale Fleet Agent."""
-
 from __future__ import annotations
 
 import argparse
@@ -13,16 +12,13 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections import deque
 from pathlib import Path
 from typing import Any, Deque, Dict, Optional
 
-_SRC_DIR = Path(__file__).resolve().parent
-if str(_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(_SRC_DIR))
-
-import layout_compiler  # noqa: E402
-import sysinfo  # noqa: E402
+import desk_layout
+import tailscale_host
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
@@ -73,24 +69,21 @@ class FleetAgent:
         self.runtime_dir = runtime_dir
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.computer_name_override = computer_name.strip()
-
         self.server_conf_path = self.runtime_dir / "deskflow-server.conf"
         self.deskflow_conf_path = self.runtime_dir / "Deskflow.conf"
-
         self.overlay_proc: Optional[subprocess.Popen] = None
         self.deskflow_proc: Optional[subprocess.Popen] = None
         self.active_signature: Optional[str] = None
         self.active_role: str = "idle"
         self.last_restart_attempt: float = 0.0
-
         self.logs: Deque[str] = deque(maxlen=40)
         self.log_lock = threading.Lock()
         self.running = True
-
-        self._machine_key = self._load_or_create_machine_key()
+        self.machine_key = self._load_or_create_machine_key()
+        self.env = tailscale_host.discover_gui_env()
 
     def _load_or_create_machine_key(self) -> str:
-        ts = sysinfo.get_tailscale_info()
+        ts = tailscale_host.get_tailscale_info()
         if ts.get("ip"):
             return f"ts:{ts['ip']}"
         key_file = self.runtime_dir / "machine_key.txt"
@@ -98,9 +91,7 @@ class FleetAgent:
             val = key_file.read_text(encoding="utf-8").strip()
             if val:
                 return val
-        import uuid
-
-        val = f"uuid:{uuid.uuid4()}"
+        val = f"uuid:{uuid.uuid4().hex}"
         key_file.write_text(val, encoding="utf-8")
         return val
 
@@ -129,18 +120,18 @@ class FleetAgent:
                 timeout = max(5, int(round(expires_in)) + 1)
                 cmd = [
                     sys.executable,
-                    str(_SRC_DIR / "overlay.py"),
+                    "-m",
+                    "qr_overlay",
                     "--code",
-                    code,
+                    str(code),
                     "--label",
-                    label,
+                    str(label),
                     "--timeout",
                     str(timeout),
                 ]
-                env = sysinfo.discover_gui_env()
                 self.overlay_proc = subprocess.Popen(
                     cmd,
-                    env=env,
+                    env=self.env,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     creationflags=_NO_WINDOW,
@@ -154,7 +145,6 @@ class FleetAgent:
         role = str(reply.get("desired_role") or "idle")
         ini_text = str(reply.get("deskflow_ini") or "")
         srv_text = str(reply.get("server_conf") or "")
-
         if role == "idle" or not ini_text:
             if self.deskflow_proc is not None:
                 _terminate_proc(self.deskflow_proc)
@@ -170,33 +160,21 @@ class FleetAgent:
         sig = hashlib.sha256(f"{role}\n{ini_text}\n{srv_text}".encode("utf-8")).hexdigest()
         proc_dead = self.deskflow_proc is None or self.deskflow_proc.poll() is not None
         need_start = (sig != self.active_signature) or (proc_dead and (time.time() - self.last_restart_attempt) >= 3.0)
-
         if not need_start:
             return
 
         _terminate_proc(self.deskflow_proc)
-        self.deskflow_proc = None
         self.last_restart_attempt = time.time()
-
-        self.deskflow_conf_path.write_text(ini_text, encoding="utf-8")
         if role == "server" and srv_text:
             self.server_conf_path.write_text(srv_text, encoding="utf-8")
-
+        self.deskflow_conf_path.write_text(ini_text, encoding="utf-8")
         with self.log_lock:
             self.logs.clear()
-        self._append_log(f"[agent] starting deskflow-core {role}")
-
-        cmd = [
-            deskflow_bin,
-            role,
-            "--new-instance",
-            "-s",
-            str(self.deskflow_conf_path),
-        ]
-        env = sysinfo.discover_gui_env()
+        self._append_log(f"[agent] starting deskflow-core ({role})")
+        cmd = [deskflow_bin, role, "-s", str(self.deskflow_conf_path), "--new-instance"]
         self.deskflow_proc = subprocess.Popen(
             cmd,
-            env=env,
+            env=self.env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -220,20 +198,17 @@ class FleetAgent:
         return f"exited ({rc})"
 
     def run_once(self) -> None:
-        env = sysinfo.discover_gui_env()
-        ts = sysinfo.get_tailscale_info()
-        os_info = sysinfo.get_os_info()
-        displays = sysinfo.get_displays(env=env)
-        deskflow_bin = sysinfo.find_deskflow_core()
-
+        self.env = tailscale_host.discover_gui_env()
+        ts = tailscale_host.get_tailscale_info()
+        os_info = tailscale_host.get_os_info()
+        displays = tailscale_host.get_displays(self.env)
+        deskflow_bin = tailscale_host.find_deskflow_core()
         if ts.get("ip"):
-            self._machine_key = f"ts:{ts['ip']}"
-
+            self.machine_key = f"ts:{ts['ip']}"
         hostname = ts.get("hostname") or os_info["os"]
         computer_name = self.computer_name_override or hostname
-
         payload = {
-            "machine_key": self._machine_key,
+            "machine_key": self.machine_key,
             "computer_name": computer_name,
             "hostname": hostname,
             "os": os_info["os"],
@@ -246,9 +221,8 @@ class FleetAgent:
             "deskflow_installed": bool(deskflow_bin),
             "deskflow_status": self._current_status(deskflow_bin),
             "deskflow_log": self._log_snapshot(),
-            "server_conf_path": layout_compiler.to_forward_slash_path(str(self.server_conf_path)),
+            "server_conf_path": desk_layout.to_forward_slash_path(str(self.server_conf_path)),
         }
-
         reply = _post_json(f"{self.hub_url}/api/heartbeat", payload, timeout=3.5)
         self._sync_overlay(
             active=bool(reply.get("pair_active")),
@@ -263,14 +237,14 @@ class FleetAgent:
             self.running = False
 
         signal.signal(signal.SIGINT, _stop)
-        signal.signal(signal.SIGTERM, _stop)
+        if hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, _stop)
 
         try:
             while self.running:
                 try:
                     self.run_once()
                 except (urllib.error.URLError, TimeoutError, OSError):
-                    # Hub temporarily unreachable; hide stale overlay cleanly
                     if self.overlay_proc is not None:
                         _terminate_proc(self.overlay_proc)
                         self.overlay_proc = None
@@ -283,6 +257,11 @@ class FleetAgent:
         finally:
             _terminate_proc(self.overlay_proc)
             _terminate_proc(self.deskflow_proc)
+
+
+def _write_pid(pid_file: Path) -> None:
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(str(os.getpid()), encoding="utf-8")
 
 
 def main() -> None:
@@ -303,16 +282,8 @@ def main() -> None:
 
     hub_url = (args.hub_url or cfg.get("hub_url") or "http://127.0.0.1:24808").strip()
     computer_name = (args.computer_name or cfg.get("computer_name") or "").strip()
-
-    agent = FleetAgent(
-        hub_url=hub_url,
-        runtime_dir=default_runtime_dir(),
-        computer_name=computer_name,
-    )
-    pid_file = agent.runtime_dir.parent / "agent.pid"
-    pid_file.parent.mkdir(parents=True, exist_ok=True)
-    pid_file.write_text(str(os.getpid()), encoding="utf-8")
-
+    agent = FleetAgent(hub_url=hub_url, runtime_dir=default_runtime_dir(), computer_name=computer_name)
+    _write_pid(agent.runtime_dir / "agent.pid")
     if args.once:
         agent.run_once()
         return

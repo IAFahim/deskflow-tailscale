@@ -1,5 +1,8 @@
 __pycache__/
 *.py[cod]
+*.egg-info/
+dist/
+build/
 *.db
 *.sqlite
 *.log
@@ -8,5 +11,6 @@ run/
 data/
 config.json
 .venv/
+.pytest_cache/
 .DS_Store
 Thumbs.db

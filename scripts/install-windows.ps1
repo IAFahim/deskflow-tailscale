@@ -2,13 +2,26 @@ param(
     [string]$HubUrl = "http://127.0.0.1:24808",
     [switch]$Hub,
     [switch]$NoStartup,
-    [string]$ComputerName = ""
+    [string]$ComputerName = "",
+    [string]$PackageSpec = ""
 )
-
 $ErrorActionPreference = "Stop"
-$RepoRoot = Split-Path -Parent $PSScriptRoot
+
+$ScriptPath = $MyInvocation.MyCommand.Path
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($ScriptPath) { Split-Path -Parent $ScriptPath } else { "" }
+$ParentDir = if ($ScriptDir) { Split-Path -Parent $ScriptDir } else { "" }
+if (-not $PackageSpec) {
+    if ($ParentDir -and (Test-Path (Join-Path $ParentDir "pyproject.toml"))) {
+        $PackageSpec = $ParentDir
+    } else {
+        $PackageSpec = "https://github.com/IAFahim/deskflow-tailscale/archive/refs/heads/main.tar.gz"
+    }
+}
+
 $DataDir = Join-Path $env:LOCALAPPDATA "deskflow-tailscale"
-New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+$VenvDir = Join-Path $DataDir "venv"
+$RunDir = Join-Path $DataDir "run"
+New-Item -ItemType Directory -Force -Path $DataDir, $RunDir | Out-Null
 
 # 1. Check Tailscale
 $ts = Get-Command tailscale -ErrorAction SilentlyContinue
@@ -29,14 +42,21 @@ if (-not (Test-Path $dfCore)) {
     throw "Deskflow core binary not found at $dfCore"
 }
 
-# 3. Ensure Python is available
+# 3. Ensure Python 3 & create isolated venv + install deskflow-tailscale + 4 tiny libs
 $pyCmd = Get-Command python -ErrorAction SilentlyContinue
 if (-not $pyCmd) {
-    throw "Python 3 not found in PATH."
+    throw "Python 3 not found in PATH"
 }
 $pyExe = $pyCmd.Source
-$pywExe = Join-Path (Split-Path -Parent $pyExe) "pythonw.exe"
-if (-not (Test-Path $pywExe)) { $pywExe = $pyExe }
+$VenvPy = Join-Path $VenvDir "Scripts\python.exe"
+$VenvPyW = Join-Path $VenvDir "Scripts\pythonw.exe"
+if (-not (Test-Path $VenvPy)) {
+    Write-Host "Creating Python venv at $VenvDir..."
+    & $pyExe -m venv $VenvDir
+}
+Write-Host "Installing deskflow-tailscale fleet package..."
+& $VenvPy -m pip install --upgrade --no-cache-dir --quiet $PackageSpec
+$LauncherPy = if (Test-Path $VenvPyW) { $VenvPyW } else { $VenvPy }
 
 # 4. Best-effort Windows Firewall rules for Tailscale/Deskflow ports
 try {
@@ -45,6 +65,7 @@ try {
     )
     if ($isAdmin) {
         New-NetFirewallRule -DisplayName "Deskflow-Fleet-24800" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 24800 -ErrorAction SilentlyContinue | Out-Null
+        New-NetFirewallRule -DisplayName "Deskflow-Fleet-24800-UDP" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 24800 -ErrorAction SilentlyContinue | Out-Null
         if ($Hub) {
             New-NetFirewallRule -DisplayName "Deskflow-Fleet-Hub-24808" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 24808 -ErrorAction SilentlyContinue | Out-Null
         }
@@ -72,26 +93,25 @@ function Stop-ByPidFile($PidFile) {
 if ($Hub) {
     $hubPidFile = Join-Path $DataDir "hub.pid"
     Stop-ByPidFile $hubPidFile
-    $hubScript = Join-Path $RepoRoot "src\hub.py"
-    $hubProc = Start-Process -FilePath $pywExe -ArgumentList "`"$hubScript`" --host 0.0.0.0 --port 24808" -WindowStyle Hidden -PassThru
+    $hubProc = Start-Process -FilePath $LauncherPy -ArgumentList "-m", "deskflow_fleet.hub", "--host", "0.0.0.0", "--port", "24808" -WindowStyle Hidden -PassThru
     Set-Content -Path $hubPidFile -Value $hubProc.Id -Encoding ASCII
 }
 
 # 7. Start Agent
 $agentPidFile = Join-Path $DataDir "agent.pid"
 Stop-ByPidFile $agentPidFile
-$agentScript = Join-Path $RepoRoot "src\agent.py"
-$agentProc = Start-Process -FilePath $pywExe -ArgumentList "`"$agentScript`" --hub-url `"$HubUrl`"" -WindowStyle Hidden -PassThru
+$agentArgs = @("-m", "deskflow_fleet.agent", "--hub-url", $HubUrl)
+if ($ComputerName) { $agentArgs += @("--computer-name", $ComputerName) }
+$agentProc = Start-Process -FilePath $LauncherPy -ArgumentList $agentArgs -WindowStyle Hidden -PassThru
 Set-Content -Path $agentPidFile -Value $agentProc.Id -Encoding ASCII
 
 # 8. Register per-user logon startup
 if (-not $NoStartup) {
     $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
     if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
-    Set-ItemProperty -Path $runKey -Name "DeskflowFleetAgent" -Value "`"$pywExe`" `"$agentScript`" --hub-url `"$HubUrl`""
+    Set-ItemProperty -Path $runKey -Name "DeskflowFleetAgent" -Value "`"$LauncherPy`" -m deskflow_fleet.agent --hub-url `"$HubUrl`""
     if ($Hub) {
-        $hubScript = Join-Path $RepoRoot "src\hub.py"
-        Set-ItemProperty -Path $runKey -Name "DeskflowFleetHub" -Value "`"$pywExe`" `"$hubScript`" --host 0.0.0.0 --port 24808"
+        Set-ItemProperty -Path $runKey -Name "DeskflowFleetHub" -Value "`"$LauncherPy`" -m deskflow_fleet.hub --host 0.0.0.0 --port 24808"
     }
 }
 

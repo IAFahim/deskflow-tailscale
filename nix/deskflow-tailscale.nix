@@ -1,4 +1,5 @@
 { config, pkgs, lib, ... }:
+
 let
   cfg = config.services.deskflowFleet;
 in
@@ -8,21 +9,27 @@ in
     hubUrl = lib.mkOption {
       type = lib.types.str;
       default = "http://127.0.0.1:24808";
-      description = "URL of the Deskflow Fleet Hub over Tailscale.";
+      description = "URL of the Deskflow Fleet Hub over Tailscale";
     };
-    repoDir = lib.mkOption {
+    venvDir = lib.mkOption {
       type = lib.types.str;
-      default = ".deskflow-tailscale";
-      description = "Relative path inside $HOME where deskflow-tailscale is cloned.";
+      default = "%h/.local/share/deskflow-tailscale/venv";
+      description = "Path to the Python venv where deskflow-tailscale is installed";
+    };
+    hub = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Also open port 24808 on tailscale0 if this host runs the Hub";
     };
     deskflowPort = lib.mkOption {
       type = lib.types.port;
       default = 24800;
+      description = "Deskflow TCP/UDP port on tailscale0";
     };
     useLanMouse = lib.mkOption {
       type = lib.types.bool;
       default = false;
-      description = "Set true if running a minimal wlroots compositor without XDG InputCapture portals.";
+      description = "Set true if running a minimal wlroots compositor without XDG InputCapture portals";
     };
   };
 
@@ -46,8 +53,8 @@ in
 
     # Trust Deskflow only on the encrypted Tailscale WireGuard interface.
     networking.firewall.interfaces.tailscale0 = {
-      allowedTCPPorts = [ cfg.deskflowPort 24808 ];
-      allowedUDPPorts = [ cfg.deskflowPort 4242 ];
+      allowedTCPPorts = [ cfg.deskflowPort ] ++ lib.optional cfg.hub 24808;
+      allowedUDPPorts = [ cfg.deskflowPort ];
     };
 
     systemd.user.services.deskflow-fleet-agent = {
@@ -55,7 +62,7 @@ in
       wantedBy = [ "graphical-session.target" ];
       after = [ "graphical-session.target" "network-online.target" ];
       serviceConfig = {
-        ExecStart = "${pkgs.python3}/bin/python3 %h/${cfg.repoDir}/src/agent.py --hub-url ${cfg.hubUrl}";
+        ExecStart = "${cfg.venvDir}/bin/python -m deskflow_fleet.agent --hub-url ${cfg.hubUrl}";
         Restart = "always";
         RestartSec = 3;
       };

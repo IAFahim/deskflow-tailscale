@@ -1,36 +1,30 @@
 """Deskflow-Tailscale Fleet Hub: HTTP server, SQLite state, REST API, and Web UI."""
-
 from __future__ import annotations
 
 import argparse
 import json
 import os
 import sqlite3
-import sys
 import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-_SRC_DIR = Path(__file__).resolve().parent
-if str(_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(_SRC_DIR))
+import desk_layout
+import tailscale_host
+import tinyqr
 
-import layout_compiler  # noqa: E402
-import qr_gen  # noqa: E402
-import sysinfo  # noqa: E402
-
-_REPO_ROOT = _SRC_DIR.parent
-_WEB_INDEX = _REPO_ROOT / "web" / "index.html"
+_PKG_DIR = Path(__file__).resolve().parent
+_WEB_INDEX = _PKG_DIR / "web" / "index.html"
 
 
 def default_data_dir() -> Path:
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-        return Path(base) / "deskflow-tailscale"
+        return Path(base) / "deskflow-tailscale" / "data"
     return Path.home() / ".local" / "share" / "deskflow-tailscale"
 
 
@@ -39,13 +33,13 @@ class FleetStore:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
+        self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
     def _init_schema(self) -> None:
         with self._lock:
-            cur = self._conn.cursor()
+            cur = self.conn.cursor()
             cur.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS nodes (
@@ -86,13 +80,13 @@ class FleetStore:
                 );
                 """
             )
-            cur.execute("INSERT OR IGNORE INTO layout_state (id, revision, master_id, items_json, active_preset) VALUES (1, 1, NULL, '[]', NULL)")
             cur.execute("INSERT OR IGNORE INTO pair_state (id, active, started_at, expires_at) VALUES (1, 0, 0, 0)")
-            self._conn.commit()
+            cur.execute("INSERT OR IGNORE INTO layout_state (id, revision, master_id, items_json, active_preset) VALUES (1, 1, NULL, '[]', NULL)")
+            self.conn.commit()
 
     def close(self) -> None:
         with self._lock:
-            self._conn.close()
+            self.conn.close()
 
     def _next_code(self, cur: sqlite3.Cursor) -> str:
         cur.execute("SELECT id FROM nodes")
@@ -103,10 +97,10 @@ class FleetStore:
         return f"P{idx}"
 
     @staticmethod
-    def _code_sort_key(node_id: str) -> tuple:
+    def _code_sort_key(node_id: str) -> Tuple[int, str]:
         if node_id.startswith("P") and node_id[1:].isdigit():
-            return (0, int(node_id[1:]), node_id)
-        return (1, 0, node_id)
+            return (0, f"{int(node_id[1:]):05d}")
+        return (1, node_id)
 
     def _get_pair_locked(self, cur: sqlite3.Cursor, now: float) -> Dict[str, Any]:
         cur.execute("SELECT active, started_at, expires_at FROM pair_state WHERE id = 1")
@@ -115,7 +109,7 @@ class FleetStore:
         expires_at = float(row["expires_at"])
         if active and now >= expires_at:
             cur.execute("UPDATE pair_state SET active = 0 WHERE id = 1")
-            self._conn.commit()
+            self.conn.commit()
             active = False
         remaining = max(0.0, expires_at - now) if active else 0.0
         return {"active": active, "remaining": round(remaining, 1)}
@@ -146,7 +140,6 @@ class FleetStore:
         machine_key = str(payload.get("machine_key") or payload.get("tailscale_ip") or payload.get("hostname") or "").strip()
         if not machine_key:
             raise ValueError("Missing machine_key")
-
         computer_name = str(payload.get("computer_name") or payload.get("hostname") or "pc").strip()
         hostname = str(payload.get("hostname") or computer_name).strip()
         os_name = str(payload.get("os") or "unknown").strip()
@@ -162,7 +155,7 @@ class FleetStore:
         server_conf_path = str(payload.get("server_conf_path") or "deskflow-server.conf").strip()
 
         with self._lock:
-            cur = self._conn.cursor()
+            cur = self.conn.cursor()
             cur.execute("SELECT id FROM nodes WHERE machine_key = ?", (machine_key,))
             row = cur.fetchone()
             if row:
@@ -176,21 +169,9 @@ class FleetStore:
                     WHERE id=?
                     """,
                     (
-                        computer_name,
-                        hostname,
-                        os_name,
-                        os_detail,
-                        tailscale_ip,
-                        dns_name,
-                        display_w,
-                        display_h,
-                        monitors_json,
-                        df_installed,
-                        df_status,
-                        df_log,
-                        server_conf_path,
-                        now,
-                        node_id,
+                        computer_name, hostname, os_name, os_detail, tailscale_ip, dns_name,
+                        display_w, display_h, monitors_json, df_installed, df_status, df_log,
+                        server_conf_path, now, node_id,
                     ),
                 )
             else:
@@ -204,26 +185,12 @@ class FleetStore:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        node_id,
-                        machine_key,
-                        computer_name,
-                        hostname,
-                        os_name,
-                        os_detail,
-                        tailscale_ip,
-                        dns_name,
-                        display_w,
-                        display_h,
-                        monitors_json,
-                        df_installed,
-                        df_status,
-                        df_log,
-                        server_conf_path,
-                        now,
+                        node_id, machine_key, computer_name, hostname, os_name, os_detail,
+                        tailscale_ip, dns_name, display_w, display_h, monitors_json,
+                        df_installed, df_status, df_log, server_conf_path, now,
                     ),
                 )
-            self._conn.commit()
-
+            self.conn.commit()
             pair = self._get_pair_locked(cur, now)
             layout = self._layout_locked(cur)
             nodes_map = self._nodes_map_locked(cur, now)
@@ -231,31 +198,26 @@ class FleetStore:
         node = nodes_map[node_id]
         master_id = layout["master_id"]
         in_layout = any(str(it.get("id")) == node_id for it in layout["items"])
-
         desired_role = "idle"
         deskflow_ini = ""
         server_conf = ""
         if master_id and in_layout and master_id in nodes_map:
             master_node = nodes_map[master_id]
-            if node_id == master_id:
-                desired_role = "server"
-                server_conf = layout_compiler.compile_server_conf(nodes_map, layout)
-                deskflow_ini = layout_compiler.compile_deskflow_ini(
-                    computer_name=node["computer_name"],
-                    role="server",
-                    local_ts_ip=node["tailscale_ip"],
-                    master_ts_ip=master_node["tailscale_ip"],
-                    server_conf_path=node["server_conf_path"],
-                )
-            elif master_node.get("tailscale_ip"):
-                desired_role = "client"
-                deskflow_ini = layout_compiler.compile_deskflow_ini(
-                    computer_name=node["computer_name"],
-                    role="client",
-                    local_ts_ip=node["tailscale_ip"],
-                    master_ts_ip=master_node["tailscale_ip"],
-                    server_conf_path=node["server_conf_path"],
-                )
+            desired_role = "server" if node_id == master_id else "client"
+            computer_names = [
+                nodes_map[it["id"]]["computer_name"]
+                for it in layout["items"]
+                if it.get("id") in nodes_map
+            ]
+            server_conf = desk_layout.compile_server_conf(nodes_map, layout)
+            deskflow_ini = desk_layout.compile_deskflow_ini(
+                computer_name=node["computer_name"],
+                role=desired_role,
+                local_ts_ip=node["tailscale_ip"],
+                master_ts_ip=master_node["tailscale_ip"],
+                server_conf_path=node["server_conf_path"],
+                computer_names=computer_names,
+            )
 
         return {
             "code": node_id,
@@ -271,7 +233,7 @@ class FleetStore:
     def get_state(self) -> Dict[str, Any]:
         now = time.time()
         with self._lock:
-            cur = self._conn.cursor()
+            cur = self.conn.cursor()
             pair = self._get_pair_locked(cur, now)
             layout = self._layout_locked(cur)
             nodes_map = self._nodes_map_locked(cur, now)
@@ -284,18 +246,15 @@ class FleetStore:
                 }
                 for row in cur.fetchall()
             ]
-
         nodes_list = sorted(nodes_map.values(), key=lambda n: self._code_sort_key(n["id"]))
         names_by_id = {n["id"]: n["computer_name"] for n in nodes_list}
-        links = layout_compiler.compute_links(layout["items"], names_by_id)
-        server_conf_preview = layout_compiler.compile_server_conf(nodes_map, layout) if layout["items"] else ""
+        links = desk_layout.compute_links(layout["items"], names_by_id)
+        server_conf_preview = desk_layout.compile_server_conf(nodes_map, layout) if layout["items"] else ""
         return {
             "now": now,
-            "revision": layout["revision"],
-            "pair_active": pair["active"],
-            "pair_expires_in": pair["remaining"],
             "nodes": nodes_list,
             "layout": {
+                "revision": layout["revision"],
                 "master_id": layout["master_id"],
                 "items": layout["items"],
                 "active_preset": layout["active_preset"],
@@ -303,24 +262,28 @@ class FleetStore:
             "links": links,
             "server_conf_preview": server_conf_preview,
             "presets": presets,
+            "pair_active": pair["active"],
+            "pair_expires_in": pair["remaining"],
         }
 
     def start_pair(self, duration: float = 45.0) -> Dict[str, Any]:
         now = time.time()
         dur = max(5.0, min(300.0, float(duration)))
         with self._lock:
-            self._conn.execute(
+            cur = self.conn.cursor()
+            cur.execute(
                 "UPDATE pair_state SET active = 1, started_at = ?, expires_at = ? WHERE id = 1",
                 (now, now + dur),
             )
-            self._conn.commit()
+            self.conn.commit()
         return {"pair_active": True, "pair_expires_in": dur}
 
     def stop_pair(self) -> Dict[str, Any]:
         with self._lock:
-            self._conn.execute("UPDATE pair_state SET active = 0, expires_at = 0 WHERE id = 1")
-            self._conn.commit()
-        return {"pair_active": False, "pair_expires_in": 0}
+            cur = self.conn.cursor()
+            cur.execute("UPDATE pair_state SET active = 0, expires_at = 0 WHERE id = 1")
+            self.conn.commit()
+        return {"pair_active": False, "pair_expires_in": 0.0}
 
     def apply_layout(
         self,
@@ -330,33 +293,30 @@ class FleetStore:
     ) -> Dict[str, Any]:
         now = time.time()
         with self._lock:
-            cur = self._conn.cursor()
+            cur = self.conn.cursor()
             nodes_map = self._nodes_map_locked(cur, now)
             cleaned: List[Dict[str, Any]] = []
             seen = set()
             for it in items:
-                nid = layout_compiler.normalize_code(str(it.get("id") or ""))
+                nid = desk_layout.normalize_code(str(it.get("id") or ""))
                 if nid not in nodes_map or nid in seen:
                     continue
                 seen.add(nid)
-                ar = layout_compiler.node_aspect_ratio(nodes_map[nid])
+                ar = desk_layout.node_aspect_ratio(nodes_map[nid])
                 h = round(max(0.5, float(it.get("h") or 1.0)), 3)
                 w = round(max(0.5, float(it.get("w") or (h * ar))), 3)
-                cleaned.append(
-                    {
-                        "id": nid,
-                        "x": round(float(it.get("x") or 0.0), 3),
-                        "y": round(float(it.get("y") or 0.0), 3),
-                        "w": w,
-                        "h": h,
-                    }
-                )
-            norm_master = layout_compiler.normalize_code(master_id) if master_id else None
+                cleaned.append({
+                    "id": nid,
+                    "x": round(float(it.get("x") or 0), 3),
+                    "y": round(float(it.get("y") or 0), 3),
+                    "w": w,
+                    "h": h,
+                })
+            norm_master = desk_layout.normalize_code(master_id) if master_id else None
             if cleaned and (not norm_master or norm_master not in seen):
                 norm_master = cleaned[0]["id"]
             if not cleaned:
                 norm_master = None
-
             cur.execute("SELECT revision FROM layout_state WHERE id = 1")
             rev = int(cur.fetchone()["revision"]) + 1
             cur.execute(
@@ -364,10 +324,8 @@ class FleetStore:
                 (rev, norm_master, json.dumps(cleaned), active_preset),
             )
             cur.execute("UPDATE pair_state SET active = 0, expires_at = 0 WHERE id = 1")
-            self._conn.commit()
-            preview = layout_compiler.compile_server_conf(
-                nodes_map, {"master_id": norm_master, "items": cleaned}
-            )
+            self.conn.commit()
+            preview = desk_layout.compile_server_conf(nodes_map, {"master_id": norm_master, "items": cleaned})
         return {
             "revision": rev,
             "master_id": norm_master,
@@ -377,7 +335,7 @@ class FleetStore:
 
     def stop_layout(self) -> Dict[str, Any]:
         with self._lock:
-            cur = self._conn.cursor()
+            cur = self.conn.cursor()
             cur.execute("SELECT revision, items_json FROM layout_state WHERE id = 1")
             row = cur.fetchone()
             rev = int(row["revision"]) + 1
@@ -385,19 +343,20 @@ class FleetStore:
                 "UPDATE layout_state SET revision=?, master_id=NULL, active_preset=NULL WHERE id=1",
                 (rev,),
             )
-            self._conn.commit()
+            self.conn.commit()
         return {"revision": rev, "master_id": None}
 
     def solve_from_photo(self, detections: List[Dict[str, Any]], apply_now: bool = True) -> Dict[str, Any]:
         now = time.time()
         with self._lock:
-            cur = self._conn.cursor()
+            cur = self.conn.cursor()
             nodes_map = self._nodes_map_locked(cur, now)
             layout = self._layout_locked(cur)
-        solved = layout_compiler.solve_layout_from_photo(
+        existing_master_id = layout.get("master_id")
+        solved = desk_layout.solve_layout_from_photo(
             detections=detections,
             nodes_by_code=nodes_map,
-            existing_master_id=layout.get("master_id"),
+            existing_master_id=existing_master_id,
         )
         if apply_now and solved["items"]:
             res = self.apply_layout(solved["master_id"], solved["items"], active_preset=None)
@@ -413,7 +372,7 @@ class FleetStore:
             raise ValueError("Preset name required")
         now = time.time()
         with self._lock:
-            cur = self._conn.cursor()
+            cur = self.conn.cursor()
             if layout is None:
                 cur_layout = self._layout_locked(cur)
                 data = {"master_id": cur_layout["master_id"], "items": cur_layout["items"]}
@@ -424,13 +383,13 @@ class FleetStore:
                 "ON CONFLICT(name) DO UPDATE SET layout_json=excluded.layout_json, updated_at=excluded.updated_at",
                 (clean_name, json.dumps(data), now),
             )
-            cur.execute("UPDATE layout_state SET active_preset=? WHERE id=1", (clean_name,))
-            self._conn.commit()
+            cur.execute("UPDATE layout_state SET active_preset = ? WHERE id = 1", (clean_name,))
+            self.conn.commit()
         return {"name": clean_name, "layout": data, "updated_at": now}
 
     def apply_preset(self, name: str) -> Dict[str, Any]:
         with self._lock:
-            cur = self._conn.cursor()
+            cur = self.conn.cursor()
             cur.execute("SELECT layout_json FROM presets WHERE name = ?", (name.strip(),))
             row = cur.fetchone()
             if not row:
@@ -438,34 +397,42 @@ class FleetStore:
             data = json.loads(row["layout_json"])
         return self.apply_layout(data.get("master_id"), data.get("items") or [], active_preset=name.strip())
 
-    def delete_preset(self, name: str) -> None:
-        with self._lock:
-            self._conn.execute("DELETE FROM presets WHERE name = ?", (name.strip(),))
-            self._conn.commit()
-
     def delete_node(self, node_id: str) -> None:
-        nid = layout_compiler.normalize_code(node_id)
+        nid = desk_layout.normalize_code(node_id)
         with self._lock:
-            cur = self._conn.cursor()
+            cur = self.conn.cursor()
             cur.execute("DELETE FROM nodes WHERE id = ?", (nid,))
             layout = self._layout_locked(cur)
-            new_items = [it for it in layout["items"] if str(it.get("id")) != nid]
-            if len(new_items) != len(layout["items"]):
-                new_master = layout["master_id"] if layout["master_id"] != nid else (new_items[0]["id"] if new_items else None)
+            new_items = [it for it in layout["items"] if it.get("id") != nid]
+            if len(new_items) != len(layout["items"]) or layout["master_id"] == nid:
+                new_master = None if layout["master_id"] == nid else layout["master_id"]
+                if not new_items:
+                    new_master = None
                 cur.execute(
                     "UPDATE layout_state SET revision=?, master_id=?, items_json=? WHERE id=1",
                     (layout["revision"] + 1, new_master, json.dumps(new_items)),
                 )
-            self._conn.commit()
+            self.conn.commit()
+
+    def delete_preset(self, name: str) -> None:
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute("DELETE FROM presets WHERE name = ?", (name.strip(),))
+            self.conn.commit()
 
 
-def create_server(host: str, port: int, db_path: Path, web_index: Path = _WEB_INDEX) -> ThreadingHTTPServer:
+def create_server(
+    host: str,
+    port: int,
+    db_path: Path,
+    web_index: Path = _WEB_INDEX,
+) -> ThreadingHTTPServer:
     store = FleetStore(db_path)
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
-        def log_message(self, fmt: str, *args: Any) -> None:  # quiet stdout logs
+        def log_message(self, fmt: str, *args: Any) -> None:
             return
 
         def _send_bytes(self, status: int, content_type: str, data: bytes) -> None:
@@ -489,21 +456,15 @@ def create_server(host: str, port: int, db_path: Path, web_index: Path = _WEB_IN
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             path = parsed.path
-
-            if path == "/" or path == "/index.html":
+            if path in ("/", "/index.html"):
                 if web_index.exists():
                     self._send_bytes(HTTPStatus.OK, "text/html; charset=utf-8", web_index.read_bytes())
                 else:
                     self._send_bytes(HTTPStatus.NOT_FOUND, "text/plain", b"web/index.html missing")
                 return
-
-            if path == "/api/health":
-                self._send_json(HTTPStatus.OK, {"ok": True})
-                return
-
             if path == "/api/state":
+                ts_info = tailscale_host.get_tailscale_info()
                 state = store.get_state()
-                ts_info = sysinfo.get_tailscale_info()
                 state["hub"] = {
                     "tailscale_ip": ts_info.get("ip", ""),
                     "dns_name": ts_info.get("dns_name", ""),
@@ -511,31 +472,26 @@ def create_server(host: str, port: int, db_path: Path, web_index: Path = _WEB_IN
                 }
                 self._send_json(HTTPStatus.OK, state)
                 return
-
             if path.startswith("/api/qr/") and path.endswith(".png"):
                 code = path[len("/api/qr/") : -len(".png")]
                 qs = parse_qs(parsed.query)
                 payload_text = (qs.get("text") or [code])[0]
                 scale = max(4, min(24, int((qs.get("scale") or ["12"])[0])))
                 try:
-                    mat = qr_gen.encode_qr(payload_text)
-                    png = qr_gen.render_png(mat, scale=scale, border=4)
+                    png = tinyqr.to_png(payload_text, scale=scale, border=4)
                     self._send_bytes(HTTPStatus.OK, "image/png", png)
                 except Exception as exc:
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
-
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
 
         def do_POST(self) -> None:
-            parsed = urlparse(self.path)
-            path = parsed.path
             try:
                 body = self._read_json()
             except Exception as exc:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": f"Invalid JSON: {exc}"})
                 return
-
+            path = urlparse(self.path).path
             try:
                 if path == "/api/heartbeat":
                     self._send_json(HTTPStatus.OK, store.heartbeat(body))
@@ -552,10 +508,9 @@ def create_server(host: str, port: int, db_path: Path, web_index: Path = _WEB_IN
                     )
                     self._send_json(HTTPStatus.OK, res)
                 elif path == "/api/layout/from-photo":
-                    res = store.solve_from_photo(
-                        detections=body.get("detections") or [],
-                        apply_now=bool(body.get("apply", True)),
-                    )
+                    detections = body.get("detections") or []
+                    apply_now = bool(body.get("apply", True))
+                    res = store.solve_from_photo(detections, apply_now=apply_now)
                     self._send_json(HTTPStatus.OK, res)
                 elif path == "/api/layout/stop":
                     self._send_json(HTTPStatus.OK, store.stop_layout())
@@ -565,9 +520,6 @@ def create_server(host: str, port: int, db_path: Path, web_index: Path = _WEB_IN
                 elif path == "/api/presets/apply":
                     res = store.apply_preset(str(body.get("name") or ""))
                     self._send_json(HTTPStatus.OK, res)
-                elif path == "/api/nodes/delete":
-                    store.delete_node(str(body.get("id") or ""))
-                    self._send_json(HTTPStatus.OK, {"ok": True})
                 else:
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
             except KeyError as exc:
@@ -578,18 +530,17 @@ def create_server(host: str, port: int, db_path: Path, web_index: Path = _WEB_IN
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
         def do_DELETE(self) -> None:
-            parsed = urlparse(self.path)
-            path = parsed.path
-            if path.startswith("/api/presets/"):
-                name = path[len("/api/presets/") :]
-                from urllib.parse import unquote
+            from urllib.parse import unquote
 
-                store.delete_preset(unquote(name))
-                self._send_json(HTTPStatus.OK, {"ok": True})
-                return
+            path = urlparse(self.path).path
             if path.startswith("/api/nodes/"):
                 nid = path[len("/api/nodes/") :]
                 store.delete_node(nid)
+                self._send_json(HTTPStatus.OK, {"ok": True})
+                return
+            if path.startswith("/api/presets/"):
+                name = unquote(path[len("/api/presets/") :])
+                store.delete_preset(name)
                 self._send_json(HTTPStatus.OK, {"ok": True})
                 return
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
@@ -607,12 +558,12 @@ def main() -> None:
     args = parser.parse_args()
 
     srv = create_server(args.host, args.port, Path(args.db))
-    ts = sysinfo.get_tailscale_info()
+    ts = tailscale_host.get_tailscale_info()
     print(f"Deskflow Fleet Hub listening on http://{args.host}:{args.port}")
     if ts.get("ip"):
         print(f"Tailscale URL: http://{ts['ip']}:{args.port}")
     if ts.get("dns_name"):
-        print(f"MagicDNS URL:  http://{ts['dns_name']}:{args.port} (or HTTPS via tailscale serve)")
+        print(f"MagicDNS URL: http://{ts['dns_name']}:{args.port} (or HTTPS via tailscale serve)")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
