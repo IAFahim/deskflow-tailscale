@@ -42,6 +42,8 @@ Linux (Arch / Omarchy / Ubuntu / Fedora / NixOS):
 curl -fsSL https://raw.githubusercontent.com/IAFahim/deskflow-tailscale/main/scripts/install-linux.sh | bash -s -- --hub-url "http://<HUB-TAILSCALE-IP>:24808"
 ```
 
+> **Hyprland note:** Stock `xdg-desktop-portal-hyprland` lacks `RemoteDesktop`. On Arch/Omarchy, install `yay -S xdg-desktop-portal-luminous` (or on NixOS add `github:waycrate/xdg-desktop-portal-luminous` to `xdg.portal.extraPortals` and route `RemoteDesktop`/`Clipboard` to `luminous`); `install-linux.sh` configures `remote_permission_check = false`, `hyprland-portals.conf`, and `ufw` `24800/tcp` on `tailscale0` automatically.
+
 ## Pairing Flow
 
 1. Run `deskflow-pair` (or tap **Pair / Show QRs** in the Web UI at `http://<HUB-TAILSCALE-IP>:24808`).

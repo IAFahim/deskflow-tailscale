@@ -67,6 +67,17 @@ if [[ "$need_pkg" -eq 1 ]]; then
   fi
 fi
 
+if command -v ufw >/dev/null 2>&1 && { systemctl is-active --quiet ufw 2>/dev/null || sudo -n ufw status 2>/dev/null | grep -q "Status: active"; }; then
+  if sudo -n true 2>/dev/null || [[ -t 0 ]]; then
+    sudo ufw allow in on tailscale0 to any port 24800 proto tcp comment 'deskflow' >/dev/null || true
+    if [[ "$IS_HUB" -eq 1 ]]; then
+      sudo ufw allow in on tailscale0 to any port 24808 proto tcp comment 'deskflow-hub' >/dev/null || true
+    fi
+  else
+    echo "Notice: ufw is active; allow Deskflow on tailscale0: sudo ufw allow in on tailscale0 to any port 24800 proto tcp" >&2
+  fi
+fi
+
 # 2. Create isolated venv (inheriting system GTK3/PyGObject) and install deskflow-tailscale + 4 tiny libs
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   echo "Creating Python venv at $VENV_DIR..."
@@ -100,6 +111,46 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]] && [[ -S "${XDG_RUNTIME_DIR}/bus" ]]; then
   export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
 fi
+
+is_hyprland=0
+if [[ "${XDG_CURRENT_DESKTOP:-}" == *Hyprland* ]] || [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+  is_hyprland=1
+elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment 2>/dev/null | grep -qE '^(XDG_CURRENT_DESKTOP=.*Hyprland|HYPRLAND_INSTANCE_SIGNATURE=)'; then
+  is_hyprland=1
+fi
+if [[ "$is_hyprland" -eq 1 ]]; then
+  if [[ ! -f /usr/share/xdg-desktop-portal/portals/luminous.portal ]]; then
+    if [[ -t 0 ]] && command -v yay >/dev/null 2>&1; then
+      yay -S --needed --noconfirm xdg-desktop-portal-luminous || true
+    elif [[ -t 0 ]] && command -v paru >/dev/null 2>&1; then
+      paru -S --needed --noconfirm xdg-desktop-portal-luminous || true
+    fi
+  fi
+  if [[ -f /usr/share/xdg-desktop-portal/portals/luminous.portal ]]; then
+    mkdir -p "${HOME}/.config/xdg-desktop-portal-luminous" "${HOME}/.config/xdg-desktop-portal"
+    lum_cfg="${HOME}/.config/xdg-desktop-portal-luminous/config.toml"
+    if [[ ! -f "$lum_cfg" ]]; then
+      printf 'remote_permission_check = false\n' > "$lum_cfg"
+    elif ! grep -q 'remote_permission_check' "$lum_cfg"; then
+      printf '\nremote_permission_check = false\n' >> "$lum_cfg"
+    fi
+    hp_cfg="${HOME}/.config/xdg-desktop-portal/hyprland-portals.conf"
+    if [[ ! -f "$hp_cfg" ]]; then
+      printf '[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.Secret=gnome-keyring\norg.freedesktop.impl.portal.RemoteDesktop=luminous\norg.freedesktop.impl.portal.Clipboard=luminous\n' > "$hp_cfg"
+    else
+      grep -q '^\[preferred\]' "$hp_cfg" || printf '[preferred]\n' >> "$hp_cfg"
+      grep -q '^org\.freedesktop\.impl\.portal\.RemoteDesktop=' "$hp_cfg" || printf 'org.freedesktop.impl.portal.RemoteDesktop=luminous\n' >> "$hp_cfg"
+      grep -q '^org\.freedesktop\.impl\.portal\.Clipboard=' "$hp_cfg" || printf 'org.freedesktop.impl.portal.Clipboard=luminous\n' >> "$hp_cfg"
+    fi
+    if [[ "$NO_SYSTEMD" -eq 0 ]] && command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+      systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_RUNTIME_DIR HYPRLAND_INSTANCE_SIGNATURE DBUS_SESSION_BUS_ADDRESS 2>/dev/null || true
+      systemctl --user restart xdg-desktop-portal.service >/dev/null 2>&1 || true
+    fi
+  else
+    echo "Notice: Hyprland RemoteDesktop portal missing; install AUR package: yay -S xdg-desktop-portal-luminous" >&2
+  fi
+fi
+
 if [[ "$NO_SYSTEMD" -eq 0 ]] && command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
   UNIT_DIR="${HOME}/.config/systemd/user"
   mkdir -p "$UNIT_DIR"

@@ -49,6 +49,10 @@ in
         xdg-desktop-portal-gtk
         xdg-desktop-portal-hyprland
       ];
+      # For Hyprland Deskflow Client (RemoteDesktop + Clipboard portals), add
+      # `github:waycrate/xdg-desktop-portal-luminous` to extraPortals and route:
+      # config.hyprland."org.freedesktop.impl.portal.RemoteDesktop" = [ "luminous" ];
+      # config.hyprland."org.freedesktop.impl.portal.Clipboard" = [ "luminous" ];
     };
 
     # Trust Deskflow only on the encrypted Tailscale WireGuard interface.
